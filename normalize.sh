@@ -2,6 +2,11 @@
 
 # script pour normaliser les noms des torrents 
 
+function usage
+{
+    echo "usage: normalize.sh [option] file[.gz]"
+}
+
 function free_tmp_file
 {
     mv $1 $2
@@ -11,14 +16,13 @@ function free_tmp_file
 
 function purge_bad_lines
 {
-# recupere seulement les lignes formé. on exclue les lignes qui ne comporte pas de magnet|categorie|...|...
+    # recupere seulement les lignes formé. on exclue les lignes qui ne comporte pas de magnet|categorie|...|...
     
     echo "Supprime les lignes malformées (peut prendre du temps)"
-    #egrep -i "^.*\|[0-9]+\|[0-9a-f]+\|[0-9]+\|.+\|[0-9]+\|[0-9]+$" $1 > tmp_openbay_torrents_purge_bad_lines
+    egrep -i "^.*\|[0-9]+\|[0-9a-f]+\|[0-9]+\|.+\|[0-9]+\|[0-9]+$" $1 > tmp_openbay_torrents_purge_bad_lines
+    free_tmp_file tmp_openbay_torrents_purge_bad_lines $1
 
-    #free_tmp_file tmp_openbay_torrents_purge_bad_lines $1
-
-    echo "Remplace \"series & tv\" par tv-shows"
+    echo "Remplace \"series & tv\" par shows-tv"
     sed 's/|"series & tv"|/|shows-tv|/' < $1 > tmp_opb_replace_shows
     free_tmp_file tmp_opb_replace_shows $1
 }
@@ -90,8 +94,8 @@ function rm_tags
 function rm_multiple_punct
 {
     echo "Supprime les ponctuations inutiles"
-#Attention cette opération supprime les " de début et fin
-#on remplace les multiples espaces dans 's/ +/ /g' et non dans 's/[[:punct:]]+/-/g' pour eviter de n'avoir que des '-' dans chaque ligne
+    #Attention cette opération supprime les " de début et fin
+    #on remplace les multiples espaces dans 's/ +/ /g' et non dans 's/[[:punct:]]+/-/g' pour eviter de n'avoir que des '-' dans chaque ligne
 
     sed -re 's/[[:punct:]]+/-/g' -e 's/ +/ /g' -e 's/^[- ]+//' -e 's/[- ]+$//' < $1 > tmp_opb_without_multiple_punct
     free_tmp_file tmp_opb_without_multiple_punct $1
@@ -111,7 +115,7 @@ function join_files
     
     join -t'|' tmp_join_name tmp_join_tail > $1
     rm tmp_*
-    sed 's/^[0-9]+|/|/' < $1 > tmp_remove_nl
+    sed -r 's/^[0-9]+[|]//' < $1 > tmp_remove_nl
     
     free_tmp_file tmp_remove_nl $1
 }
@@ -125,22 +129,19 @@ function rm_empty_name
 
 if [ $# -eq 0 ]
 then
-    echo "usage: normalize [--split-categorie] [-z] file"
-    echo "--split-categorie       divise la base de donnée en categorie et nettoie la base par categorie"
-    
+    usage
     exit 1
 fi
 
 if [ $# -gt 1 ]
 then
-    if [ $1 != "--split-categorie" ]
+    if [ $1 == "--split-category" ]
     then
-	echo "usage: normalize [--split-categorie] file "
-	exit 1
-    else
+
 	if [ ! -f $2 ]
 	then
-	    echo "$0: '$1' is not a file"
+	    usage
+	    echo "$0: '$2' is not a file"
 	    exit 1
 	fi
 	
@@ -151,28 +152,34 @@ then
 	    zcat $main_file > $main_file"_dump"
 	fi
 
-	main_file=dump_$main_file
-
-	#purge_bad_lines $main_file	
-#on obtient les categories avec la commande 
-#cat $2 | rev | cut -d'|' -f3 | sort |uniq | rev > openbay_categories
-#mais elle met bien trop de temps à s'executer
-#j'ai aussi changé "series & tv" en tv-shows car ça n'avait pas de sens à mon avis
-	categories='music anime software other movies games books adult tv-shows'
+    	#purge_bad_lines $main_file	
+	#on obtient les categories avec la commande 
+	#cat $2 | rev | cut -d'|' -f3 | sort |uniq | rev > openbay_categories
+	#mais elle met bien trop de temps à s'executer
+	#j'ai aussi changé "series & tv" en tv-shows car ça n'avait pas de sens à mon avis
+	categories='music anime software other movies games books adult shows-tv'
 	for i in $categories
 	do
 	    echo -n "Extracting $i..."
-	    #egrep "\|$i\|[0-9]+\|[0-9]+" $main_file > bd_openbay_$i
+	#    egrep "\|$i\|[0-9]+\|[0-9]+" $main_file > openbay_$i.csv
 	    echo " done."
 	    sleep 0.2
 	done
-	files=$(ls bd_openbay_*)
-	
+	files=$(ls openbay_* | grep -v $main_file)
+    elif [ $1 == "--import-mongodb" ]
+    then
+	echo "importing"
+	# changer les pipes en ',' et avertir qu'il faut d'abbord avoir normalisé sinon ça peut mal séparer
+
+    else
+	usage
+	exit 1
     fi
     
 else
     if [ ! -f $1 ]
     then
+	usage
 	echo "$0: '$1' is not a file"
 	exit 1
     fi
@@ -181,31 +188,34 @@ else
     #purge_bad_lines $main_file
 fi
 
-echo $files
+exit 1
 
-exit
+for file in $files
+do
 
-file_name="$file""_name"
-file_tail="$file""_tail"
+    echo -e "\n$file..."
+    file_name="name_$file"
+    file_tail="tail_$file"
 
-nb_bytes=$(ls -lh $file | awk '{print $5}')
+    nb_bytes=$(ls -lh $file | awk '{print $5}')
 
+    extract_name $file $file_name $file_tail
+    rm_pipe $file_name
+    rm_webinfo $file_name
+    rm_path $file_name
+    rm_brackets $file_name
+    rm_tags $file_name
+    rm_multiple_punct $file_name
+    add_start_end_quotes $file_name
 
+    join_files $file $file_name $file_tail
+    rm_empty_name $file
 
-extract_name $file $file_name $file_tail
+    rm $file_name $file_tail
 
-rm_pipe $file_name
-rm_webinfo $file_name
-rm_path $file_name
-rm_brackets $file_name
-rm_tags $file_name
-rm_multiple_punct $file_name
-add_start_end_quotes $file_name
+    nb_bytes_new=$(ls -lh $file | awk '{print $5}')
+    echo -e "\nold $file: $nb_bytes, new $file: $nb_bytes_new"
 
-join_files $file $file_name $file_tail
-rm_empty_name $file
+    sleep 0.2
 
-rm $file_name $file_tail
-
-nb_bytes_new=$(ls -lh $file | awk '{print $5}')
-echo -e "\nold $file: $nb_bytes, new $file: $nb_bytes_new"
+done
